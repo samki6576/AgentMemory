@@ -1,0 +1,33 @@
+# MemPalace configuration -- local, session-level agent memory.
+# Zero API cost: embeddings and storage are entirely local (ChromaDB-backed).
+#
+# This is the fast path. Anything durable or worth sharing across sessions
+# is promoted to CockroachDB by scripts/mempalace-sync-client.js, which
+# reads from this store and calls the `sync` Lambda.
+
+palace:
+  name: agent-memory
+  root: ~/.mempalace/agent-memory
+
+memory:
+  backend: chromadb
+  embedding_model: local-minilm  # matches Xenova/all-MiniLM-L6-v2 used server-side, so
+                                  # local and CockroachDB-side vectors stay comparable
+  auto_save: true                # every conversation exchange is saved locally
+  recall:
+    top_k: 8
+    min_similarity: 0.35
+
+# Facts/decisions/preferences at or above this salience are eligible for the
+# CockroachDB sync path. Keep this high enough that low-value chatter never
+# leaves the local machine.
+sync:
+  enabled: true
+  salience_threshold: 0.6
+  interval_minutes: 15
+  endpoint_env_var: AGENT_MEMORY_API_URL   # set to the deployed API Gateway URL + /sync
+
+wake_up:
+  # Token budget for mempalaceWakeUp -- loads identity + top long-term
+  # memories from CockroachDB at the start of a new session.
+  max_tokens: 200

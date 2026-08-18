@@ -1,0 +1,21 @@
+{
+  "name": "cockroachdb-mcp-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for CockroachDB agent memory",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "debug": "^4.3.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "DEBUG=cockroach-mcp:* node index.js"
+  }
+}

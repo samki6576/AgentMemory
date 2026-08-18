@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "cockroachdb-managed": {
+      "type": "http",
+      "url": "https://cockroachlabs.cloud/mcp",
+      "headers": {
+        "mcp-cluster-id": "${CLUSTER_ID}",
+        "Authorization": "Bearer ${MCP_TOKEN}"
+      }
+    },
+    "cockroachdb-local": {
+      "command": "node",
+      "args": ["./mcp-server/index.js"],
+      "env": {
+        "COCKROACH_DB_URL": "${COCKROACH_DB_URL}",
+        "DEBUG": "cockroach-mcp:*"
+      }
+    }
+  }
+}
+
