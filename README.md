@@ -1,24 +1,12 @@
-# AgentMemory — Hybrid Local + Distributed Memory for AI Agents
+**AgentMemory** is a hybrid memory system for AI agents that combines fast local session memory with durable, globally distributed long-term memory. It was submitted for the **CockroachDB × AWS Hackathon** (Build with Agentic Memory).
 
-**Submission for: CockroachDB × AWS Hackathon — Build with Agentic Memory**
-**Deadline:** August 18, 2026
+---
 
-> Memory is not an afterthought — it's what makes an agent useful in production.
+## Core Concept
 
-AgentMemory pairs **MemPalace** (fast, local, zero-cost session memory) with
-**CockroachDB** (durable, globally distributed long-term memory), connected via
-**CockroachDB's Managed MCP Server**. Short-lived context stays local and free;
-anything worth remembering across sessions, users, or regions is written
-through to CockroachDB, where it becomes searchable via native distributed
-vector indexing. **No Lambda, no API Gateway, no server maintenance required.**
+Most agent memory demos are either a vector DB with no session-layer speed, or an in-memory buffer that evaporates on restart. AgentMemory solves both by pairing **MemPalace** (local, zero-cost session memory) with **CockroachDB** (durable, globally distributed long-term memory).
 
-## Why this architecture
-
-Most "agent memory" demos are either (a) a vector DB with no session-layer
-speed, or (b) an in-memory buffer that evaporates on restart. Neither
-reflects how production agents actually behave:
-
-| Need | Local-only | DB-only | AgentMemory (hybrid) |
+| Need | Local-only | DB-only | AgentMemory |
 |---|---|---|---|
 | Sub-ms recall within a session | ✅ | ❌ | ✅ (MemPalace) |
 | Survives restarts / multi-user | ❌ | ✅ | ✅ (CockroachDB) |
@@ -26,193 +14,104 @@ reflects how production agents actually behave:
 | Durable, queryable, multi-region | ❌ | ✅ | ✅ |
 | Semantic search across all history | partial | ✅ | ✅ |
 
-MemPalace handles the *working set* — the last N turns, decisions, and facts
-an agent needs *right now*, at zero API cost via local ChromaDB-backed
-semantic search. CockroachDB is the *system of record*: every memory that
-should survive a restart, be shared across a user's sessions, or be queried
-globally is written through to it, indexed with CockroachDB's native
-`VECTOR` type and C-SPANN distributed vector index.
+**MemPalace** handles the working set — recent turns, decisions, and facts an agent needs *right now*, via local ChromaDB-backed semantic search at zero API cost. **CockroachDB** is the system of record: memories above a salience threshold are embedded and upserted into CockroachDB, indexed with its native `VECTOR` type and C-SPANN distributed vector index. A new session can "wake up" pre-loaded with a user's highest-salience long-term memories instead of starting cold.
 
-A background sync job reconciles the two: MemPalace memories above a
-salience threshold are embedded and upserted into CockroachDB; a new
-session can "wake up" pre-loaded with a user's highest-salience long-term
-memories instead of starting cold.
+---
 
 ## Architecture
 
-Full diagram and write-up: [`docs/architecture.md`](docs/architecture.md).
-
 ```
 Claude Code / Claude API (Your Agent)
-   |
-   |-- MemPalace (local, session memory, $0)
-   |       mempalaceSearch / mempalaceStore / mempalaceWakeUp
-   |       (ChromaDB-backed, zero API cost, instant recall)
-   |
-   `-- MCP Protocol (direct, no servers) --> CockroachDB Cloud Managed MCP
-                                               memories table VECTOR(384)
-                                               C-SPANN distributed vector index
-                                               sessions + sync_cursor tables
-                                               (50M RUs/month free)
+  |
+  |-- MemPalace (local, session memory, $0)
+  |     mempalaceSearch / mempalaceStore / mempalaceWakeUp
+  |     (ChromaDB-backed, zero API cost, instant recall)
+  |
+  `-- MCP Protocol (direct, no servers) --> CockroachDB Cloud
+        Managed MCP
+        memories table VECTOR(384)
+        C-SPANN distributed vector index
+        sessions + sync_cursor tables
+        (50M RUs/month free)
 ```
 
-**Why no Lambda?** CockroachDB's Managed MCP Server lets Claude Code query the database 
-directly. Sync jobs can run locally or on a scheduled task. No Lambda cold starts, 
-no API Gateway latency, no server infrastructure to maintain.
+**Why no Lambda?** CockroachDB's Managed MCP Server lets Claude Code query the database directly. Sync jobs can run locally or on a scheduled task. No Lambda cold starts, no API Gateway latency, no server infrastructure to maintain.
 
-## CockroachDB tools used
+---
 
-- **CockroachDB Cloud Managed MCP Server** — Claude Code connects directly to 
-  your cluster via MCP for schema inspection, vector search, and memory queries 
-  (`mcp-config.json`). No Lambda required.
-- **CockroachDB Distributed Vector Indexing (C-SPANN)** — the `memories`
-  table indexes a 384-dim `VECTOR` column, prefixed by `user_id, status`, so
-  every semantic search is scoped to one user and stays fast into the
-  millions of rows (`infrastructure/schema.sql`).
-- **PostgreSQL Protocol** — direct connection via `psql` for schema management 
-  and ad-hoc queries. All tools are standard Postgres-compatible.
+## CockroachDB Tools Used
 
-## AWS services used
+- **CockroachDB Cloud Managed MCP Server** — Claude Code connects directly to the cluster via MCP for schema inspection, vector search, and memory queries (`mcp-config.json`).
+- **Distributed Vector Indexing (C-SPANN)** — the `memories` table indexes a 384-dim `VECTOR` column, prefixed by `user_id, status`, so every semantic search is scoped to one user and stays fast into the millions of rows (`infrastructure/schema.sql`).
+- **PostgreSQL Protocol** — direct connection via `psql` for schema management and ad-hoc queries.
 
-- **Amazon S3 (Optional)** — 5GB free tier for storing logs and memory exports. 
-  Minimal setup, not required for core functionality. Use for:
-  - Agent behavior logs
-  - Memory snapshots for analysis
-  - Audit trails
-  
-**Core system requires only CockroachDB Cloud (free tier).** AWS S3 is entirely optional and used only for logging/archival.
+---
 
-## Project structure
+## AWS Services Used
+
+- **Amazon S3 (Optional)** — 5GB free tier for storing logs and memory exports. Used for agent behavior logs, memory snapshots for analysis, and audit trails. **The core system requires only CockroachDB Cloud (free tier)**; S3 is entirely optional.
+
+---
+
+## Project Structure
 
 ```
 cockroachdb-x-aws-hackathon/
 ├── src/
 │   └── mempalace/
-│       └── config.yaml           # MemPalace settings (local memory)
+│       └── config.yaml          # MemPalace settings
 ├── infrastructure/
-│   ├── schema.sql                # CockroachDB DDL, C-SPANN vector index
-│   └── terraform/                # Legacy Lambda setup (optional reference)
+│   ├── schema.sql               # CockroachDB DDL, C-SPANN vector index
+│   └── terraform/               # Legacy Lambda setup (optional reference)
 ├── scripts/
-│   ├── setup-cockroachdb.ps1     # Initialize CockroachDB schema
-│   ├── setup-mempalace.ps1       # Initialize local memory
-│   └── test-integration.js       # Verify system setup
+│   ├── setup-cockroachdb.ps1    # Initialize CockroachDB schema
+│   ├── setup-mempalace.ps1      # Initialize local memory
+│   └── test-integration.js      # Verify system setup
 ├── docs/
-│   ├── QUICK-START.md            # 5-minute setup guide
-│   ├── MCP-SETUP.md              # Configure Claude Code MCP
-│   ├── architecture.md           # Design & rationale
-│   ├── skills-used.md            # CockroachDB features applied
-│   ├── RESULTS.md                # What works, known limitations
-│   └── demo-script.md            # <3 min demo
-├── mcp-config.json               # CockroachDB MCP configuration
-├── .env.example                  # Configuration template
-├── README.md                      # This file
+│   ├── QUICK-START.md           # 5-minute setup guide
+│   ├── MCP-SETUP.md             # Configure Claude Code MCP
+│   ├── architecture.md          # Design & rationale
+│   ├── skills-used.md           # CockroachDB features applied
+│   ├── RESULTS.md               # What works, known limitations
+│   └── demo-script.md           # <3 min demo
+├── mcp-config.json              # CockroachDB MCP configuration
+├── .env.example                 # Configuration template
+├── README.md
 └── LICENSE
 ```
 
-**No Lambda code, no API Gateway config, no Terraform variables needed.**
-All memory operations go directly through MCP to CockroachDB.
+**No Lambda code, no API Gateway config, no Terraform variables needed.** All memory operations go directly through MCP to CockroachDB.
 
-## Getting started
+---
 
-**Total setup time: ~5 minutes. No AWS credentials required.**
+## Getting Started (~5 minutes, no AWS credentials required)
 
-### Quick Start (5 minutes)
+1. **Set up CockroachDB (1 min)** — Sign up at https://cockroachlabs.cloud (free, no credit card), create a Serverless (Basic) cluster, copy the connection string, and paste it into `.env` as `COCKROACH_DB_URL`.
+2. **Initialize Database Schema (2 min)** — Run `.\scripts\setup-cockroachdb.ps1` or `psql $env:COCKROACH_DB_URL < infrastructure/schema.sql`.
+3. **Initialize MemPalace (1 min)** — `pip install mempalace` then `.\scripts\setup-mempalace.ps1`.
+4. **Test Everything (1 min)** — `npm install` (if needed) then `node scripts/test-integration.js`. Expected output: `✅ All tests passed! Your system is ready.`
+5. **Connect Claude Code via MCP** — See `docs/MCP-SETUP.md` for configuring Claude Code to use CockroachDB via MCP.
 
-For a complete walkthrough, see [`docs/QUICK-START.md`](docs/QUICK-START.md).
+---
 
-#### 1. Set up CockroachDB (1 min)
+## Judging Criteria Addressed
 
-- Sign up at https://cockroachlabs.cloud (free, no credit card)
-- Create a Serverless (Basic) cluster
-- Copy your connection string
+- **Agentic Memory Design** — CockroachDB is the durability and multi-user boundary for memory, with MemPalace handling the ephemeral fast path. MCP integration lets Claude Code access both seamlessly.
+- **Technical Implementation** — Vector index prefixed by `user_id, status` per CockroachDB's multi-tenancy guidance; embeddings generated locally ($0, no external API); direct PostgreSQL protocol with connection pooling.
+- **Real-World Impact** — Solves cross-session, cross-device memory loss without forcing every read through a network round trip.
+- **Production Readiness** — Parameterized SQL, connection pooling, idempotent writes, structured logging, MCP protocol for safe queries; leverages CockroachDB's built-in redundancy and failover.
+- **Creativity & Originality** — Local/global split using MCP, plus a wake-up path that lets a new session start warm instead of cold.
+- **AWS Requirement** — Optional S3 integration for archiving and exporting memory snapshots without changing core logic.
 
-```powershell
-# Copy .env template
-Copy-Item .env.example .env
+---
 
-# Edit .env and paste your CockroachDB connection string as COCKROACH_DB_URL
-code .env
-```
+## Known Limitations
 
-#### 2. Initialize Database Schema (2 min)
+- CockroachDB's current vector index only accelerates queries that constrain **every prefix column** (here, `user_id` and `status`).
+- The free-tier connection limit caps Lambda concurrency without RDS Proxy-style pooling in front of it.
 
-```powershell
-# Windows/PowerShell:
-.\scripts\setup-cockroachdb.ps1
-
-# Or manually with psql:
-psql $env:COCKROACH_DB_URL < infrastructure/schema.sql
-```
-
-#### 3. Initialize MemPalace (1 min)
-
-```powershell
-# Install if needed
-pip install mempalace
-
-# Set up local memory
-.\scripts\setup-mempalace.ps1
-```
-
-#### 4. Test Everything (1 min)
-
-```powershell
-# Verify integration
-npm install  # if needed
-node scripts/test-integration.js
-```
-
-Expected output:
-```
-✅ All tests passed! Your system is ready.
-```
-
-#### 5. Connect Claude Code (via MCP)
-
-See [`docs/MCP-SETUP.md`](docs/MCP-SETUP.md) for configuring Claude Code to 
-use CockroachDB via MCP. One-time setup, then all memories are automatically 
-stored and searchable.
-
-## Judging criteria — how this submission addresses them
-
-- **Agentic Memory Design** — CockroachDB isn't a bolted-on vector store; it
-  is the durability and multi-user boundary for memory, with MemPalace
-  handling the ephemeral fast path. The MCP server integration lets Claude
-  Code access both seamlessly. See `docs/architecture.md`.
-  
-- **Technical Implementation** — the vector index is prefixed by `user_id,
-  status` per CockroachDB's own multi-tenancy guidance, embeddings are
-  generated locally (no external API dependency, no key management, $0),
-  and the system uses direct PostgreSQL protocol connections with 
-  connection pooling.
-  
-- **Real-World Impact** — solves cross-session, cross-device memory loss
-  without forcing every read through a network round trip. Agents retain
-  context across restarts and multi-user scenarios at zero per-query cost.
-  
-- **Production Readiness** — parameterized SQL, connection pooling, idempotent
-  writes, structured logging, MCP protocol for safe queries. Leverages 
-  CockroachDB's built-in redundancy and automatic failover.
-  
-- **Creativity & Originality** — the local/global split using MCP, plus a 
-  wake-up path that lets a new session start warm instead of cold. Direct 
-  database access via MCP removes Lambda complexity while maintaining safety 
-  and performance.
-  
-- **AWS Requirement** — while the core system uses CockroachDB, optional 
-  S3 integration provides a clean way to archive and export memory snapshots, 
-  and can be added without changing core logic.
-
-## Known limitations
-
-See [`docs/RESULTS.md`](docs/RESULTS.md) — most notably, CockroachDB's
-current vector index only accelerates queries that constrain every prefix
-column (here, `user_id` and `status`), and the free-tier connection limit
-caps Lambda concurrency without RDS Proxy-style pooling in front of it.
+---
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
-#   A g e n t M e m o r y  
- #   A g e n t M e m o r y  
- 
+MIT — see `LICENSE`.
